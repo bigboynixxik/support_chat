@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package murplace.support.v1;
+
+// Путь для генерации файлов в Go-микросервисе
+option go_package = "pkg/api/v1/support_auth_v1;support_auth_v1";
+
+
+service SupportAuthService {
+  // Метод валидации сессии при подключении к WebSocket
+  rpc ValidateWSSession (ValidateRequest) returns (ValidateResponse);
+}
+
+// -----------------------------------------------------------------------------
+// Структуры данных
+// -----------------------------------------------------------------------------
+
+// Запрос от Go-микросервиса к Django
+message ValidateRequest {
+  // JWT-токен, который фронтенд прислал при открытии сокета
+  string jwt_token = 1;
+}
+
+// Ответ от Django
+message ValidateResponse {
+  // Статус проверки: true - токен валиден, false - протух/подделан
+  bool is_valid = 1;
+
+  // Если is_valid = true, монолит возвращает данные юзера
+  UserProfile user = 2;
+
+  // Если is_valid = false, монолит возвращает причину (полезно для логов Go)
+  string error_message = 3;
+}
+
+// Вложенная структура с профилем пользователя
+message UserProfile {
+  // Уникальный ID пользователя из PostgreSQL (нужен для маршрутизации в Go)
+  int64 id = 1;
+
+  // Роль пользователя (поможет Go-сервису понять, кому слать уведомления оператора)
+  Role role = 2;
+
+  // Имя или Email для отображения в интерфейсе чата
+  string display_name = 3;
+}
+
+// Перечисление возможных ролей
+enum Role {
+  ROLE_UNSPECIFIED = 0; // Значение по умолчанию (ошибка)
+  ROLE_CLIENT = 1;      // Обычный авторизованный покупатель
+  ROLE_OPERATOR = 2;    // Сотрудник поддержки (менеджер)
+}
