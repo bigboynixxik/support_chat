@@ -10,7 +10,6 @@ import (
 type Config struct {
 	AppEnv   string `env:"APP_ENV"`
 	HTTPPort string `env:"HTTP_PORT"`
-	PGDsn    string `env:"PG_DSN"`
 }
 
 func LoadConfig(path string) (*Config, error) {
