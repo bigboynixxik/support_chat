@@ -1,13 +1,15 @@
 package ws
 
 import (
+	"encoding/json"
 	"log/slog"
 	"net/http"
-	"strconv"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"support_chat/internal/service"
+	clients "support_chat/internal/transport/clients"
 	"support_chat/pkg/logger"
 )
 
@@ -20,45 +22,81 @@ var upgrader = websocket.Upgrader{
 }
 
 type Handler struct {
-	hub *service.Hub
+	hub        *service.Hub
+	authClient *clients.Client
 }
 
-func NewHandler(hub *service.Hub) *Handler {
+func NewHandler(hub *service.Hub, authClient *clients.Client) *Handler {
 	return &Handler{
-		hub: hub,
+		hub:        hub,
+		authClient: authClient,
 	}
 }
 
 func (h *Handler) HandleConnections(w http.ResponseWriter, r *http.Request) {
 	log := logger.FromContext(r.Context())
 
-	roleParam := r.URL.Query().Get("role")
-	idParam := r.URL.Query().Get("id")
-
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Error("failed to upgrade to websocket", slog.String("error", err.Error()))
 		return
 	}
+	log.Info("connection initialized, waiting for auth frame")
 
-	log.Info("new client connection established",
-		slog.String("mock_role", roleParam),
-		slog.String("mock_id", idParam),
-	)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+
+	_, msgBytes, err := conn.ReadMessage()
+	if err != nil {
+		log.Warn("failed to read auth message or timeout reached", slog.String("error", err.Error()))
+		conn.Close()
+		return
+	}
+
+	var authMsg struct {
+		Action string `json:"action"`
+		Token  string `json:"token"`
+	}
+	if err := json.Unmarshal(msgBytes, &authMsg); err != nil || authMsg.Action != "auth" || authMsg.Token == "" {
+		log.Warn("invalid auth frame received")
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error": "invalid auth frame"}`))
+		conn.Close()
+		return
+	}
+
+	authResp, err := h.authClient.Validate(r.Context(), authMsg.Token)
+	if err != nil {
+		log.Error("grpc validation failed", slog.String("error", err.Error()))
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error": "internal server error"}`))
+		conn.Close()
+		return
+	}
+
+	if !authResp.IsValid {
+		log.Warn("invalid token", slog.String("reason", authResp.ErrorMessage))
+		conn.WriteMessage(websocket.TextMessage, []byte(`{"error": "`+authResp.ErrorMessage+`"}`))
+		conn.Close()
+		return
+	}
+
+	conn.SetReadDeadline(time.Time{})
 
 	client := service.NewClient(h.hub, conn, log)
+	client.UserID = authResp.User.Id
 
-	if roleParam == "operator" {
+	if authResp.User.Role.String() == "ROLE_OPERATOR" {
 		client.Role = service.RoleOperator
 	} else {
 		client.Role = service.RoleClient
 	}
 
-	if parsedID, err := strconv.ParseInt(idParam, 10, 64); err == nil {
-		client.UserID = parsedID
-	}
-	client.Hub.Register <- client
+	log.Info("client authenticated successfully",
+		slog.Int64("user_id", client.UserID),
+		slog.Int("role", client.Role),
+	)
 
+	conn.WriteMessage(websocket.TextMessage, []byte(`{"action": "system", "status": "authenticated"}`))
+
+	client.Hub.Register <- client
 	go client.WritePump()
 	go client.ReadPump()
 }
