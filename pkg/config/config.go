@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	AppEnv   string `env:"APP_ENV"`
-	HTTPPort string `env:"HTTP_PORT"`
+	AppEnv         string `env:"APP_ENV"`
+	HTTPPort       string `env:"HTTP_PORT"`
+	AuthGRPCTarget string `env:"AUTH_GRPC_TARGET"`
 }
 
 func LoadConfig(path string) (*Config, error) {
