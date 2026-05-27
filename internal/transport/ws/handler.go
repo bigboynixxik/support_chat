@@ -4,20 +4,31 @@ import (
 	"log/slog"
 	"net/http"
 
-	"support_chat/pkg/logger"
-
 	"github.com/gorilla/websocket"
+
+	"support_chat/internal/service"
+	"support_chat/pkg/logger"
 )
 
 var upgrader = websocket.Upgrader{
-	ReadBufferSize:  256,
-	WriteBufferSize: 256,
+	ReadBufferSize:  1024,
+	WriteBufferSize: 1024,
 	CheckOrigin: func(r *http.Request) bool {
 		return true
 	},
 }
 
-func HandleConnections(w http.ResponseWriter, r *http.Request) {
+type Handler struct {
+	hub *service.Hub
+}
+
+func NewHandler(hub *service.Hub) *Handler {
+	return &Handler{
+		hub: hub,
+	}
+}
+
+func (h *Handler) HandleConnections(w http.ResponseWriter, r *http.Request) {
 	log := logger.FromContext(r.Context())
 
 	conn, err := upgrader.Upgrade(w, r, nil)
@@ -25,23 +36,13 @@ func HandleConnections(w http.ResponseWriter, r *http.Request) {
 		log.Error("failed to upgrade to websocket", slog.String("error", err.Error()))
 		return
 	}
-	defer conn.Close()
 
-	log.Info("new client connected")
+	log.Info("new client connection established")
 
-	for {
-		messageType, message, err := conn.ReadMessage()
-		if err != nil {
-			log.Warn("client disconnected or read error", slog.String("error", err.Error()))
-			break
-		}
+	client := service.NewClient(h.hub, conn, log)
 
-		log.Debug("message received", slog.String("payload", string(message)))
+	client.Hub.Register <- client
 
-		err = conn.WriteMessage(messageType, []byte("Echo: "+string(message)))
-		if err != nil {
-			log.Error("failed to write message", slog.String("error", err.Error()))
-			break
-		}
-	}
+	go client.WritePump()
+	go client.ReadPump()
 }

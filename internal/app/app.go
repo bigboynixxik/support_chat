@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"support_chat/internal/service"
 	"support_chat/internal/transport"
 	"support_chat/internal/transport/ws"
 	"support_chat/pkg/closer"
@@ -35,8 +36,13 @@ func New(ctx context.Context) (*App, error) {
 	logger.WithContext(ctx, logs)
 	logs.Info("initializing layers", "env", cfg.AppEnv, "port", cfg.HTTPPort)
 
+	chatHub := service.NewHub(logs)
+	go chatHub.Run()
+
+	wsHandler := ws.NewHandler(chatHub)
+
 	mux := http.NewServeMux()
-	mux.HandleFunc("/ws/support", transport.LoggingMiddleware(logs, ws.HandleConnections))
+	mux.HandleFunc("/ws/support", transport.LoggingMiddleware(logs, wsHandler.HandleConnections))
 
 	httpServer := &http.Server{
 		Addr:    ":" + cfg.HTTPPort,
