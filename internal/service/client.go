@@ -3,14 +3,17 @@ package service
 import (
 	"encoding/json"
 	"log/slog"
-	"support_chat/internal/models"
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"support_chat/internal/models"
 )
 
 const (
 	writeWait      = 10 * time.Second
+	pongWait       = 60 * time.Second
+	pingPeriod     = (pongWait * 9) / 10
 	maxMessageSize = 512
 	RoleClient     = 1
 	RoleOperator   = 2
@@ -42,13 +45,20 @@ func (c *Client) ReadPump() {
 
 	c.conn.SetReadLimit(maxMessageSize)
 
+	c.conn.SetReadDeadline(time.Now().Add(pongWait))
+
+	c.conn.SetPongHandler(func(string) error {
+		c.conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
+
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			if websocket.IsUnexpectedCloseError(err, websocket.CloseGoingAway, websocket.CloseAbnormalClosure) {
-				c.log.Error("client.ReadPump unexpected websocket close", slog.String("error", err.Error()))
+				c.log.Error("unexpected websocket close", slog.String("error", err.Error()))
 			} else {
-				c.log.Info("client.ReadPump client disconnected normally")
+				c.log.Info("client disconnected normally or ping timeout")
 			}
 			break
 		}
@@ -74,7 +84,9 @@ func (c *Client) ReadPump() {
 }
 
 func (c *Client) WritePump() {
+	ticker := time.NewTicker(pingPeriod)
 	defer func() {
+		ticker.Stop()
 		c.conn.Close()
 	}()
 
@@ -89,13 +101,20 @@ func (c *Client) WritePump() {
 
 			w, err := c.conn.NextWriter(websocket.TextMessage)
 			if err != nil {
-				c.log.Error("client.WritePump failed to get next writer", slog.String("error", err.Error()))
+				c.log.Error("failed to get next writer", slog.String("error", err.Error()))
 				return
 			}
 			w.Write(message)
 
 			if err := w.Close(); err != nil {
-				c.log.Error("client.WritePump failed to close writer", slog.String("error", err.Error()))
+				c.log.Error("failed to close writer", slog.String("error", err.Error()))
+				return
+			}
+
+		case <-ticker.C:
+			c.conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := c.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				c.log.Warn("failed to send ping", slog.String("error", err.Error()))
 				return
 			}
 		}
