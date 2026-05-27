@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"support_chat/internal/service"
 	"support_chat/internal/transport"
+	"support_chat/internal/transport/clients"
 	"support_chat/internal/transport/ws"
 	"support_chat/pkg/closer"
 	"support_chat/pkg/config"
@@ -39,7 +40,12 @@ func New(ctx context.Context) (*App, error) {
 	chatHub := service.NewHub(logs)
 	go chatHub.Run()
 
-	wsHandler := ws.NewHandler(chatHub)
+	grpcAuthClient, err := clients.New(cfg.AuthGRPCTarget, logs)
+	if err != nil {
+		return nil, fmt.Errorf("app.New failed to init grpc auth client: %w", err)
+	}
+
+	wsHandler := ws.NewHandler(chatHub, grpcAuthClient)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/ws/support", transport.LoggingMiddleware(logs, wsHandler.HandleConnections))
